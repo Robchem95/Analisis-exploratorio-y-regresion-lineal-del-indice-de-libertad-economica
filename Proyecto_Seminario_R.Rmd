@@ -1,0 +1,1032 @@
+---
+title: "El indice de libertad económica como variable de interés"
+author: "Robinson Pachón, Juan Cruz Pacchioni, Fernando Jhayipanteli"
+date: "2025-09-14"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+
+
+**1)Descripción del dataset**
+
+El dataset esta construido a partir de distintas bases de datos, que contienen los registros históricos de indices y medidas macroeconómicas.
+
+Las bases de datos que lo constituyen son:
+
+***PPA_PIB:*** Contiene registros históricos del PIB ajustado por paridad de poder adquisitivo (PPA). Este indicador mide cuánto puede adquirir una persona con un dólar en un país, teniendo en cuenta además el PIB per cápita. Resulta útil para comparar el poder adquisitivo entre diferentes países. Este dataset tiene registros desde 1990 hasta 2024 para aproximadamente 190 países. (Fuente principal: Banco Mundial y Fondo Monetario Internacional).
+
+***IPH_INDEX:*** El Índice de Desempeño Ambiental (IPH, conocido internacionalmente como EPI – Environmental Performance Index) resume información sobre variables como calidad del aire, calidad del agua, salud ambiental, protección ecológica, entre otras. Este dataset contiene datos para 180 países en el año 2024. (Instituciones responsables: Yale University y Columbia University, en colaboración con el World Economic Forum).
+
+***Índice_de_Libertad_Económica_Mundial:*** Este dataset contiene los datos del índice elaborado por la Heritage Foundation, el cual busca medir el grado de facilidad para hacer negocios, crecer y generar riqueza en los países. Es un indicador controvertido, ya que castiga fuertemente políticas de intervención estatal que, para algunos economistas, son necesarias. (Institución responsable: Heritage Foundation).
+
+***Índice_de_Gini:*** Este dataset contiene datos históricos sobre desigualdad en periodos de 5 años desde 1990, para más de 200 países. El índice de Gini mide el grado de desigualdad en la distribución del ingreso dentro de la población de un mismo país. (Fuente principal: Banco Mundial, complementado con datos de ONU y OCDE para algunos países).
+
+***Índice_de_Desarrollo_Humano_(IDH):*** Contiene datos del índice de desarrollo humano, que combina dimensiones de educación, salud y nivel de vida. Cubre el periodo 1990–2023 para aproximadamente 180 países. (Institución responsable: Programa de las Naciones Unidas para el Desarrollo – PNUD).
+
+
+**1a)Normalización de las bases de datos**
+
+Los archivos se cargan en un google drive al cual se accede mediante la libreria "googledrive" con métodos como drive_get y drive_download, la libreria readxl se usa en el método read_excel, al igual que readr se usa en el método read_csv. Dplyr se usa para manejar bases de datos , transformar columnas, renombrarlas. La libreria Purr es útil para mapear y construir una lista basada en dataframe. y tool se usa para el método file_ext , ya que los archivos tienen diferentes origenes. 
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(googledrive)
+library(readxl)
+library(readr)
+library(dplyr)
+library(purrr)
+library(tools)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(vcd) 
+library(minpack.lm)
+library(knitr)
+library(nortest)
+library(minpack.lm) 
+
+nombres <- c("PPA_PIB.xlsx", 
+             "Indice_de_Gini.xlsx", 
+             "IPH_INDEX.csv", 
+             "ILE.csv", 
+             "Indice_de_Desarrollo_humano.xlsx")
+
+
+leer_archivo <- function(nombre) {
+  archivo <- drive_get(nombre)
+  ext <- file_ext(nombre)
+  ruta_temp <- tempfile(fileext = paste0(".", ext))
+  
+  drive_download(file = archivo, path = ruta_temp, overwrite = TRUE)
+  
+  if (ext %in% c("xlsx", "xls")) {
+    df <- read_excel(ruta_temp)
+  } else if (ext == "csv") {
+   
+    df <- tryCatch(
+      read_delim(ruta_temp, delim = ",", show_col_types = FALSE),
+      error = function(e) read_delim(ruta_temp, delim = ";", show_col_types = FALSE)
+    )
+  } else {
+    stop(paste("Extensión no soportada:", ext))
+  }
+  
+  return(df)
+}
+
+
+datos <- map(nombres, leer_archivo)
+
+
+names(datos) <- nombres
+
+```
+
+
+**2a)se reasignan los nombres a los diferentes archivos para facilitar el manejo**
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+nuevos_nombres <- c(
+  "PPA_PIB.xlsx" = "PIB",
+  "Indice_de_Gini.xlsx" = "CG",
+  "IPH_INDEX.csv" = "IPH",
+  "ILE.csv" = "ILE",
+  "Indice_de_Desarrollo_humano.xlsx" = "IDH"
+)
+
+
+for (archivo in names(datos)) {
+  nombre_nuevo <- nuevos_nombres[archivo]
+  if (!is.na(nombre_nuevo)) {
+    assign(nombre_nuevo, datos[[archivo]], envir = .GlobalEnv)
+  }
+}
+
+IPH <- datos[["IPH_INDEX.csv"]] %>%
+  separate(col = 1, into = paste0("V", 1:20), sep = ",")
+
+```
+
+***Seleccion_de_Columnas***
+
+Se procede a seleccionar únicamente las columnas útiles para los posteriores análisis en este caso , País , Año y el valor del respectivos indice. 
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ILE <- ILE %>%
+  select(`Country`, `Index Year`, `Overall Score`) %>%  
+  rename(
+    Pais = Country,
+    Año = `Index Year`,
+    ILE = `Overall Score`
+  )
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+PIB <- PIB %>%
+  pivot_longer(
+    cols = "1990":"2024",    
+    names_to = "Año", 
+    values_to = "PIB"          
+  ) %>%
+  rename(Pais = `Country`)%>%
+  select(Pais,Año,PIB)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+IPH <- IPH %>%
+  select(V3, V5) %>%  
+  rename(
+    Pais = V3,
+    IPH = V5
+  ) %>%
+  mutate(
+    Pais = str_replace_all(Pais, "\"", ""),  
+    Año = 2024                              
+  )
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+CG <- CG %>%
+  pivot_longer(
+    cols = 5:ncol(.),    
+    names_to = "Año", 
+    values_to = "CG"          
+  ) %>%
+  rename(Pais = "Country")%>%
+  select(Pais,Año,CG)  %>%
+  mutate(Año = stringr::str_extract(Año, "^[0-9]{4}"))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+IDH <- IDH %>%
+  select(country, year, value) %>%
+  rename(
+    Pais = country,
+    Año = year,
+    IDH = value
+  )
+```
+
+Se procede a normalizar los valores de los paises para esto se usa setdiff, buscando comparar los paises que se encuentran en un set y no en el otro, y en base a esto se van cambiando los nombres. 
+
+```{r, echo=FALSE}
+reemplazos <- c(
+  "Venezuela (Bolivarian Republic of)" = "Venezuela",
+  "Bolivia (Plurinational State of)" = "Bolivia",
+  "Myanmar"="Burma",
+  "Czechia"="Czech Republic",
+  "Congo (Democratic Republic of the)"="Democratic Republic of Congo",
+  "Congo, Dem. Rep." = "Democratic Republic of Congo",
+  "Dem. Rep. Congo"="Democratic Republic of Congo",
+  "Kyrgyzstan"= "Kyrgyz Republic",
+  "Congo"="Republic of Congo",
+  "Hong Kong, China (SAR)"="Hong Kong",
+  "Viet Nam"="Vietnam",
+  "Micronesia (Federated States of)"="Micronesia",
+  "Iran (Islamic Republic of)"="Iran",
+  "Moldova (Republic of)"="Moldova",
+  "Philippines"="The Philippines",
+  "Gambia"="The Gambia",
+  "Russian Federation"="Russia",
+  "Syrian Arab Republic"="Syria",
+  "Tanzania (United Republic of)"="Tanzania",
+  "Lao People's Democratic Republic"="Laos",
+  "Sao Tome and Principe" = "São Tomé and Príncipe",
+  "Korea (Republic of)"="South Korea",
+  "Bahamas"="The Bahamas",
+  "Eswatini (Kingdom of)"="Eswatini",
+  "Korea, Rep." = "South Korea",
+  "Cote d'Ivoire"= "Côte d'Ivoire",
+  "Egypt, Arab Rep."="Egypt",
+  "Macao SAR, China"="Macau",
+  "Hong Kong SAR, China"="Hong Kong",
+  "Congo, Rep."="Republic of Congo",
+  "Slovak Republic"="Slovakia",
+  "Gambia, The"="The Gambia",
+  "Yemen, Rep."="Yemen",
+  "Iran, Islamic Rep."="Iran",
+  "Micronesia, Fed. Sts."="Micronesia",
+  "St. Lucia"="Saint Lucia",
+  "Turkiye" ="Türkiye",
+  "Lao PDR"="Laos",
+  "Korea, Dem. People's Rep."="North Korea",
+  "St. Vincent and the Grenadines"="Saint Vincent and the Grenadines",
+  "Bahamas, The"="The Bahamas",
+  "Venezuela, RB"="Venezuela",
+  "United States of America"="United States"
+)
+
+IDH$Pais <- recode(IDH$Pais, !!!reemplazos)
+CG$Pais <- recode(CG$Pais, !!!reemplazos )
+IPH$Pais <- recode(IPH$Pais, !!!reemplazos )
+PIB$Pais <- recode(PIB$Pais, !!!reemplazos )
+
+```
+
+***Unión***
+
+Se realizan los respectivos JOIN para unificar el dataset, es normal encontrar varios registros en la categoria NA, pues no estan disponibles los indices para los mismos periodos de tiempo. 
+
+```{r, echo=FALSE, warning=FALSE}
+IDH  <- IDH  %>% mutate(Año = as.numeric(Año))
+IDH  <- IDH  %>% mutate(IDH = as.numeric(IDH))
+IPH  <- IPH  %>% mutate(Año = as.numeric(Año))
+IPH  <- IPH  %>% mutate(IPH = as.numeric(IPH))
+ILE  <- ILE  %>% mutate(Año = as.numeric(Año))
+ILE  <- ILE  %>% mutate(ILE = as.numeric(ILE))
+CG   <- CG   %>% mutate(Año = as.numeric(Año))
+CG   <- CG   %>% mutate(CG = as.numeric(CG))
+PIB  <- PIB  %>% mutate(Año = as.numeric(Año))
+lista_df <- list(IDH, IPH, ILE, CG, PIB)
+ME <- reduce(lista_df, full_join, by = c("Pais", "Año"))
+ME <- ME %>%
+  mutate(IDH = IDH * 100)
+
+no_paises <- c(
+  "Very High Human Development", "High Human Development",
+  "Medium Human Development", "Low Human Development",
+  "Arab States", "East Asia And The Pacific", "Europe And Central Asia",
+  "Latin America And The Caribbean", "South Asia", "Sub-Saharan Africa",
+  "World","Euro area", "European Union", "OECD members",
+  "High income", "Upper middle income", "Lower middle income", "Low income",
+  "Low & middle income", "Middle income", "IDA & IBRD total", "IDA only",
+  "IDA total", "IDA blend", "IBRD only",
+  "Latin America & Caribbean", "Latin America & Caribbean (excluding high income)",
+  "Latin America & the Caribbean (IDA & IBRD countries)",
+  "Sub-Saharan Africa (excluding high income)", "Sub-Saharan Africa (IDA & IBRD countries)",
+  "East Asia & Pacific", "East Asia & Pacific (excluding high income)",
+  "East Asia & Pacific (IDA & IBRD countries)",
+  "Europe & Central Asia", "Europe & Central Asia (excluding high income)",
+  "Europe & Central Asia (IDA & IBRD countries)",
+  "Middle East, North Africa, Afghanistan & Pakistan",
+  "Middle East, North Africa, Afghanistan & Pakistan (excluding high income)",
+  "Middle East, North Africa, Afghanistan & Pakistan (IDA & IBRD)",
+  "Fragile and conflict affected situations",
+  "Heavily indebted poor countries (HIPC)",
+  "Least developed countries: UN classification",
+  "Small states", "Caribbean small states",
+  "Other small states", "Pacific island small states",
+  "Early-demographic dividend", "Late-demographic dividend",
+  "Post-demographic dividend", "Pre-demographic dividend",
+  "Africa Eastern and Southern", "Africa Western and Central",
+  "Arab World", "Not classified",
+  "Central Europe and the Baltics","North America","South Asia (IDA & IBRD)"
+)
+
+ME <- ME[!(ME$Pais %in% no_paises), ]
+kable(head(ME, 10), 
+      caption = "Primeros 10 registros del índice de libertad económica",
+      digits = 2)
+
+```
+
+
+**2)Descripción de las variables que contiene**
+
+***País:*** Contiene el nombre de varios paises del mundo , además de valores por regiones , continentes e incluso asociaciones de paises. 
+
+***Año:*** La fecha a la que corresponde la medición, algunos indices no se encuentran disponibles en algunos años , debido ala periodicidad con que se miden.
+
+***IDH:*** Indice de desarrollo humano, se elabora como una combinación de tres indicadores , esperanza de vida, años promedio de escolaridad, y con el ingreso nacional bruto o PIB percápita. Se calcula como la media geometrica de los tres indices evitando asi que los desbalances en las variables generen información falsa. Si el valor esta mas cercano a 1 , o 100 dependiendo la escala que se maneje , signfica que el pais tiene un desarrollo humano más alto.
+
+***IPH o EPI :*** Indice de protección ambiental,  se basa en tres mediciones; Salud ambiental, vitalidad de los ecosistemas, cambio climático. Todas ellas abarcan características como calidad del aire, acceso a agua potable , saneamiento, exposición a metales pesados, conservación de ecosistemas, agricultura sostenible, reduccion de emisiones, transición enérgetica entre otras. Al poseer varias variables se suele usar una media ponderada. Un valor de 100 refleja un desempeño ambiental excelente, y 0 puntos un desempeño ambiental muy bajo.
+
+***ILE:***Este indice tiene el objetivo de medir que tan fácil es producir, comerciar e invertir en un país. Considera algunas variables como derechos de propiedad, tamaño del estado, regulaciónes, tratados de libre comercio. Resumiendo el indice abarca la media aritmética en 12 grandes pilares; Protección de la propiedad privada, corrupción de los gobiernos, independencia judicial, carga fiscal, gasto público, salud fiscal, facilidad para abrir empresas, flexibilizacion de contratación, estabilidad de precios e inflación, libertad comercial, libertad de inversión, libertad financiera. El valor se mide de 0 a 100 , siendo 100 economías mas libres. 
+
+
+***PIB:*** Esta columna no tiene el PIB convencional, tiene un PIB ajustado por paridad de poder adquisitivo, basicamente permite medir el poder de compra interno de la economia, y permite la comparación entre paises. La unidad de medida es el dolar, y es una variable de tipo cuantitativo, continuo y de razón. 
+
+
+***CG:***Busca medir la desigualdad en la distribución del ingreso, donde 0 es igualdad perfecta, y 1 0 100 dependiendo la escala, es desigualdad perfecta. La construcción del indice se basa en en la curva de lorenz.
+
+
+Tipos de variables: Todos los índices son variables cuantitativas, continuas y de tipo razón. En cuanto a la unidad son adimensionales, pues vienen luego de la normalización de variables.  
+
+**3)Objetivos de análisis del dataset**
+
+- Evaluar la evolución de la libertad económica a nivel mundial.
+- Evaluar la evolución del desarrollo humano a nivel mundial. 
+- Responder a la pregunta ¿cómo esta el mundo en temas de protección ambiental ?
+- Responder a la preguna ¿ Cuáles son los paises con mayor igualdad y mayor poder adquisitivo ?
+- Determinar si existe alguna relación entre la libertad económica y el desarrollo humano. 
+- Determinar cual es el país que mayor equilibrio ha logrado en todas sus variables. 
+
+**4)Análisis**
+
+***¿Ha variado significativamente el indice de libertad económica en cuanto al promedio global?***
+
+Para contestar esta pregunta se decide gráficar el promedio mundial por año, en una linea temporal.
+
+
+```{r, echo=FALSE,warning=FALSE}
+
+
+promedios_ile <- ME %>%
+  filter(!is.na(ILE)) %>%  
+  group_by(Año) %>%
+  summarise(
+    ILE_prom = mean(ILE, na.rm = TRUE)
+  ) %>%
+  ungroup()
+extremos <- promedios_ile %>%
+  filter(Año == min(Año) | Año == max(Año) | Año == 2024 )
+ggplot(promedios_ile, aes(x = Año, y = ILE_prom)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red", size = 2) +
+  geom_text(
+    data = extremos,
+    aes(label = round(ILE_prom, 2)),
+    vjust = -1, 
+    color = "black",
+    size = 4
+  ) +
+  labs(
+    title = "Promedio global de ILE por año",
+    x = "Año",
+    y = "Valor promedio de ILE"
+  ) +
+  theme_minimal()
+
+```
+En el año 1995 el promedio global era de 57.58, y en el año 2024 , ultimo año de medición no proyectada, se tiene un valor de 58.64 en base a esto se decide realizar un test de hipótesis para evaluar si las medias son significativamente diferentes, antes se deben realizar pruebas de normalidad, inicialmente se elaboran algunos histogramas.
+
+Pruebas realizadas, Histogramas con variables brutas y test de shapiro arrojaron que los datos no se distribuian de manera normal.(No se incluyeron esas pruebas intermedias aca para no saturar el informe). En base a eso para no recurrir a pruebas no paramétricas se realizan transformaciones sobre los datos para normalizarlos.
+
+ILE^3, al ser todos los valores mayores a 1 se puede usar esto para comparar las medias. 
+
+
+```{r, echo=FALSE}
+ME_sub_ILE <- subset(ME, Año %in% c(1995, 2024))
+ILE_1995 <- (subset(ME_sub_ILE, Año == 1995)$ILE)**1.5
+ILE_2024 <- (subset(ME_sub_ILE, Año == 2024)$ILE)**1.5
+
+hist(ILE_1995, main ='Indice de Libertad Económica 1995')
+hist(ILE_2024, main ='Indice de Libertad Económica 2024')
+
+```
+
+```{r, echo=FALSE}
+shapiro_1995 <- shapiro.test(ILE_1995)
+shapiro_2024 <- shapiro.test(ILE_2024)
+shapiro_results <- tibble(
+  Año = c(1995, 2024),
+  W = c(shapiro_1995$statistic, shapiro_2024$statistic),
+  p_value = c(shapiro_1995$p.value, shapiro_2024$p.value)
+)
+
+kable(shapiro_results, caption = "Resultados del Test de Shapiro-Wilk para ILE")
+```
+El test del shapiro con un 95% de confianza demuestra que no hay evidencia suficiente para rechazar normalidad de los datos, se requiere ahora evaluar la homocedasticidad.
+
+```{r, echo=FALSE}
+
+var_test <- var.test(ILE_1995, ILE_2024)
+
+
+var_results <- tibble(
+  Estadístico_F = var_test$statistic,
+  Grados_libertad1 = var_test$parameter[1],
+  Grados_libertad2 = var_test$parameter[2],
+  p_value = var_test$p.value,
+  Conf_Inf = var_test$conf.int[1],
+  Conf_Sup = var_test$conf.int[2]
+)
+
+
+kable(var_results, caption = "Resultados del Test de Varianzas (F-test)")
+```
+
+al ser p mayor al nivel de significancia se determina que no hay razon para rechazar la hipotesis nula , por lo tanto se puede asumir igualdad entre varianzas. En base a esto se puede realizar la comparación entre los promedios.
+
+Hipótesis nula: Promedio de ILE_2024 = Promedio de ILE_1995
+Hipótesis alternativa: Promedio de ILE_2024 > Promedio de ILE_1995
+
+
+```{r, echo=FALSE}
+t_test <- t.test(ILE_2024, ILE_1995, alternative = "greater", var.equal = TRUE)
+
+t_results <- tibble(
+  Estadístico_t = t_test$statistic,
+  Grados_libertad = t_test$parameter,
+  p_value = t_test$p.value,
+  Media_x = t_test$estimate[1],
+  Media_y = t_test$estimate[2],
+  Conf_Inf = t_test$conf.int[1],
+  Conf_Sup = t_test$conf.int[2]
+)
+
+kable(t_results, caption = "Resultados del Test t de Student (una cola)")
+```
+
+Como el valor p es mayor que el nivel de sgnificancia, no hay evidencia para rechazar la hipótesis nula, es decir que no se puede asegurar diferencia significativa entre los dos promedios. Es estadisticamente correcto inferir que la libertad económica mundial promedio se encuentra estancada.
+
+***¿Ha variado significativamente el indice de desarrollo humano en cuanto al promedio global?***
+
+Para contestar esta pregunta se decide gráficar el promedio mundial por año, en una linea temporal.
+
+```{r, echo=FALSE}
+
+promedios_idh <-ME %>%
+  filter(!is.na(IDH)) %>%  
+  group_by(Año) %>%
+  summarise(
+    IDH_prom = mean(IDH, na.rm = TRUE)
+  ) %>%
+  ungroup()
+extremos <- promedios_idh %>%
+  filter(Año == min(Año) |Año==1995| Año == max(Año))
+ggplot(promedios_idh, aes(x = Año, y = IDH_prom)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_point(color = "blue", size = 1.5) +
+  geom_text(
+    data = extremos,
+    aes(label = round(IDH_prom, 2)),
+    vjust = 1.1, 
+    color = "black",
+    size = 3
+  ) +
+  labs(
+    title = "Promedio global de IDH por año",
+    x = "Año",
+    y = "Valor promedio de IDH"
+  ) +
+  theme_minimal()
+
+```
+En el año 1995 el promedio global era de 62.5, y en el año 2023 , ultimo año de medición no proyectada, se tiene un valor de 74.08 en base a esto se decide realizar un test de hipótesis para evaluar si las medias son significativamente diferentes, antes se deben realizar pruebas de normalidad, inicialmente se elaboran algunos histogramas.
+
+
+```{r, echo=FALSE}
+ME_sub_IDH <- subset(ME, Año %in% c(1995, 2023))
+IDH_1995 <- (subset(ME_sub_IDH, Año == 1995)$IDH)
+IDH_2023 <- (subset(ME_sub_IDH, Año == 2023)$IDH)
+
+hist(IDH_1995, main ='Indice de desarrollo 1995')
+hist(IDH_2023, main ='Indice de desarrollo 2023')
+```
+
+```{r, echo=FALSE}
+shapiro_1995 <- shapiro.test(IDH_1995)
+shapiro_2023 <- shapiro.test(IDH_2023)
+
+shapiro_results <- tibble(
+  Año = c(1995, 2023),
+  Estadístico_W = c(shapiro_1995$statistic, shapiro_2023$statistic),
+  p_value = c(shapiro_1995$p.value, shapiro_2023$p.value)
+)
+
+kable(shapiro_results, caption = "Resultados del test de normalidad Shapiro-Wilk")
+```
+Al realizar los histogramas y evaluar con el test de shapiro se determino que no habia normalidad , para comparar las medias se procede a realizar un test no paramétrico, ya que ningún exponente de los probados lograba normalizar los datos. Para esto se aplica el test de wilcoxon.
+
+```{r, echo=FALSE}
+wilcox_res <- wilcox.test(IDH ~ Año, data = ME_sub_IDH)
+
+wilcox_table <- tibble(
+  Método = wilcox_res$method,
+  Estadístico_W = wilcox_res$statistic,
+  p_value = wilcox_res$p.value
+)
+
+
+kable(wilcox_table, caption = "Resultado del test de Wilcoxon para IDH por Año")
+```
+Este test compara las medianas , en este caso se rechaza la hipotesis nula de medianas iguales, y se establece que los años tienen medianas significativamente diferentes. Por lo que el mundo ha avanzado significativamente en cuanto al desarrollo humano desde 1995 a 2023.
+
+```{r, echo=FALSE}
+
+medianas_idh <- ME %>%
+  filter(!is.na(IDH)) %>%  
+  group_by(Año) %>%
+  summarise(
+    IDH_mediana = median(IDH, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+extremos <- medianas_idh %>%
+  filter(Año == min(Año) | Año == 1995 | Año == max(Año))
+
+ggplot(medianas_idh, aes(x = Año, y = IDH_mediana)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red", size = 1.5) +
+  geom_text(
+    data = extremos,
+    aes(label = round(IDH_mediana, 2)),
+    vjust = 1.1, 
+    color = "black",
+    size = 3
+  ) +
+  labs(
+    title = "Mediana global de IDH por año",
+    x = "Año",
+    y = "Valor mediano de IDH"
+  ) +
+  theme_minimal()
+
+```
+
+***¿cómo esta el mundo en temas de protección ambiental ?***
+
+Para este caso los únicos valores disponibles en el dataset son del año 2024, es por eso el alto número de NA
+
+```{r, echo=FALSE}
+iph_summary <- summary(ME$IPH)
+
+iph_df <- data.frame(
+  Estadístico = names(iph_summary),
+  Valor = as.numeric(iph_summary)
+)
+
+kable(iph_df, caption = "Resumen estadístico de IPH")
+
+```
+El valor promedio para el indice EPI o IPH  de protección ambiental en el mundo es de 46.95 , esto significa que el mundo esta lejos de ser catalogado como alto en cuanto a desempeño del valor de cuidado ambiental.
+
+
+```{r, echo=FALSE}
+top_5 <- ME %>%
+  arrange(desc(IPH)) %>%
+  slice(1:5) %>%
+  select(Pais, IPH)
+
+kable(top_5, caption = "Top 5 países con mejor desempeño ambiental  en 2024")
+```
+Los 5 paises con mayor desempeño ambiental son Estonia, Luxemburgo, Alemania, Finlandia y Reino Unido. 
+
+```{r, echo=FALSE}
+bottom_5 <- ME %>%
+  arrange(IPH) %>%
+  slice(1:5) %>%
+  select(Pais, IPH)
+kable(bottom_5, caption = "Top 5 países con Peor desempeño Ambiental en 2024")
+```
+
+Loa 5 Paises con peor desempeño ambiental son Vietnam, Pakistan, Laos, Burma e India.Siendo Vietnam el de peor desempeño a nivel mundial, para los paises registrados. 
+
+
+***¿ Cuáles son los paises con mayor igualdad y mayor poder adquisitivo ?***
+
+Se usaron los datos del año 2022 que es el que cuenta con mayor número de registros para el Coeficiente de gini:
+
+Los paises con mayor desigualdad son:
+
+```{r, echo=FALSE}
+top_5_CG <- ME %>%
+  filter(Año == 2022, !is.na(CG)) %>%  
+  arrange(desc(CG)) %>%                
+  slice(1:5) %>%                      
+  select(Pais, CG)                       
+
+kable(top_5_CG, caption = "Top 5 países con Peor desempeño en desigualdad en 2022")
+```
+
+y con mayor igualdad:
+
+```{r, echo=FALSE}
+bottom_5_CG <- ME %>%
+  filter(Año == 2022, !is.na(CG)) %>%  
+  arrange((CG)) %>%                
+  slice(1:5) %>%                      
+  select(Pais, CG)                       
+
+kable(bottom_5_CG, caption = "Top 5 países con mejor desempeño en desigualdad en 2022")
+```
+
+Paises como Slovakia , Slovenia, India, República Checa y Moldavia , presentan los menores niveles de desigualdad. Para el año 2022 dentro de los paises evaluados. Se recomienda incluir más registros en la base de datos para análisis precisos. 
+
+En cuanto a la capacidad de adquisición interna de bienes y servicios los paises con mas alta capacidad son: 
+
+```{r, echo=FALSE}
+top_5_PIB <- ME %>%
+  filter(Año == 2024, !is.na(PIB)) %>%  
+  arrange(desc(PIB)) %>%                
+  slice(1:5) %>%                        
+  select(Pais, PIB)                      
+
+kable(top_5_PIB, caption = "Top 5 países con mejor poder adquisitivo interno en 2024")
+```
+Los paises con peor poder adquisitivo son: 
+
+```{r, echo=FALSE}
+bottom_5_PIB <- ME %>%
+  filter(Año == 2024, !is.na(PIB)) %>%  
+  arrange((PIB)) %>%                
+  slice(1:5) %>%                        
+  select(Pais, PIB)                      
+
+kable(bottom_5_PIB, caption = "Top 5 países con peor poder adquisitivo interno en 2024")
+```
+
+***Relación entre la libertad económica y el desarrollo humano***
+
+Para esto se van a utilizar la totalidad de los valores del dataset pero unicamente para registros donde las dos columnas tienen valor, lo primero es establecer si existe normalidad en cada una de las variables.
+
+```{r, echo=FALSE}
+ME_filtrado <- ME[!is.na(ME$ILE) & !is.na(ME$IDH), ]
+hist(ME_filtrado$ILE, main = "Indice de Libertad Económica", xlab = "ILE", col = "red", border = "black")
+hist(ME_filtrado$IDH, main = "Indice de Desarrollo Humano", xlab = "IDH", col = "blue", border = "black")
+```
+
+```{r, echo=FALSE}
+resultado_ILE <- ad.test(ME_filtrado$ILE)
+resultado_IDH <- ad.test(ME_filtrado$IDH)
+
+ad_resumen <- data.frame(
+  Variable = c("ILE", "IDH"),
+  A = c(resultado_ILE$statistic, resultado_IDH$statistic),
+  p_value = c(resultado_ILE$p.value, resultado_IDH$p.value)
+)
+
+kable(ad_resumen, caption = "Prueba de Anderson-Darling para ILE e IDH")
+
+```
+
+
+Segun los valores obtenidos mediante el test de Anderson Darling, ninguna de las variables es de tipo Normal
+
+***Detección de Outliers, ILE VS IDH***
+
+```{r, echo=FALSE}
+boxplot(ME_filtrado$ILE, ME_filtrado$IDH,
+        names = c("ILE", "IDH"),
+        main = "Boxplot de variables",
+        ylab = "Valores")
+
+```
+Basado en este gráfico podriamos contemplar los datos inferiores al quartil 1 como anómalos, sin embargo son valores reales, por lo que su eliminación puede sobreajustar el modelo. La decisión es conservarlos y en su lugar aplicar pruebas No  paramétricas, usando el coeficiente de spearman.
+
+***Correlación entre ILE e IDH***
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(ME, aes(x = ILE, y = IDH)) +
+  geom_point(color = "blue") +              
+  labs(title = "Relación IDH vs ILE", x = "ILE", y = "IDH")
+```
+
+El gráfico mayoritariamente parece mostrar una tendencia creciente entre los dos valores, al no ser normales se utiliza el coeficiente de spearman y no de pearson. 
+
+```{r, echo=FALSE, warning=FALSE}
+
+cor_spearman <- cor.test(ME$IDH, ME$ILE, method = "spearman")
+
+
+cor_resumen <- data.frame(
+  Variable_1 = "IDH",
+  Variable_2 = "ILE",
+  Correlación = cor_spearman$estimate,
+  p_value = cor_spearman$p.value,
+  Método = cor_spearman$method
+)
+
+kable(cor_resumen, caption = "Correlación de Spearman entre IDH e ILE")
+```
+Esto demuestra que hay una correlación fuertemente positiva entre las dos variables, la relación no es necesariamente lineal, el valor p muestra que la relación es estadisticamente significativa. Podria decirse que en general paises con mayor indice de libertad económica presentan mayor indice de desarrollo humano.
+
+Otra forma de categorizar los valores es categorizando las variables.
+
+***Construcción e interpretación de intervalos de confianza para variables cualitativas***
+
+Para este caso se ha decidido optar por realizar una clasificación de los paises de acuerdo al indice de libertad económica que es el principal tema de interés. 
+
+```{r}
+ME <- ME %>%
+  mutate(
+    ILE_Clasificación = case_when(
+      ILE >= 80 & ILE <= 100 ~ "Libre",
+      ILE >= 70 & ILE < 80  ~ "Mayormente libre",
+      ILE >= 65 & ILE < 70  ~ "Moderadamente libre",
+      ILE >= 60 & ILE < 65  ~ "Moderadamente regulado",
+      ILE >= 55 & ILE < 60  ~ "Mayormente regulado",
+      ILE >= 50 & ILE < 55  ~ "No libre",
+      ILE < 50              ~ "Reprimido",
+      TRUE ~ NA_character_
+    )
+  )
+kable(head(ME, 10), 
+      caption = "Primeros 10 registros del índice de libertad económica con categoria",
+      digits = 2)
+```
+
+
+```{r, echo=FALSE}
+resultados <- ME %>%
+  group_by(Año) %>%
+  summarise(
+    n = n(),
+    k = sum(ILE_Clasificación == "Libre", na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    prop =round( k / n,4), 
+    se = round(sqrt(prop * (1 - prop) / n),4), 
+    z = 1.96, 
+    IC_inf =round( prop - z * se,4),
+    IC_sup = round(prop + z * se,4)
+  )
+
+kable(resultados, 
+      caption = "Proporción de Paises con Economias clasificadas como libres",
+      digits = 4)
+```
+
+De esta manera construimos intervalos por año , ya que no tendria mayor sentido hacer el global para el objeto de este estudio. Los datos interpretados por ejemplo para el año 2024 serian asi : 
+
+de 272 paises evaluados se encontro una proporcion de 1.47% de paises que cumplen la categoria de libre , y para un nivel de confianza del 95% la proporción de paises se encuentra en un intervalo entre entre 0.04% y 3.45%
+
+***Construcción e interpretación de intervalos de confianza para variables cuantitativas***
+
+Como nuestra principal variable de interés es el indice de libertad de económica ahora se realizara el mismo análisis sobre la variable.
+
+```{r, echo=FALSE}
+resultados_ILE <- ME %>%
+  group_by(Año) %>%
+  summarise(
+    n = n(),                       
+    media = round(mean(ILE, na.rm = TRUE),3), 
+    sd = round(sd(ILE, na.rm = TRUE),3),      
+    .groups = "drop"
+  ) %>%
+  mutate(
+    se = round(sd / sqrt(n),3), 
+    t_crit = round(qt(0.975, df = n - 1),3), 
+    IC_inf = round(media - t_crit * se,3),
+    IC_sup = round(media + t_crit * se,3),
+  )
+kable(resultados_ILE, 
+      caption = "Intervalos de confianza para libertad económica por año",
+      digits = 2)
+```
+
+Esto se interpretaria diciendo que para un nivel de confianza del 95% el intervalo de indice de libertad económica es de 57.3 a 59.9 para el año 2024 a nivel mundial. Esto categorizaria al mundo como una economia mayormente regulada. 
+
+***Análisis de Asociación***
+
+Para realizar el análisis de asociación se ha decidido categorizar el indice de desarrollo humano. 
+
+```{r}
+ME <- ME %>%
+  mutate(IDH_Categoria = case_when(
+    IDH >= 80 ~ "muy alto",
+    IDH >= 70 & IDH < 80 ~ "alto",
+    IDH >= 55 & IDH < 70 ~ "medio",
+    IDH >= 35 & IDH < 55 ~ "bajo",
+    IDH < 35 ~ "muy bajo"
+  ))
+kable(head(ME, 10), 
+      caption = "Primeros 10 registros del índice de libertad económica con categoria por IDH",
+      digits = 2)
+```
+
+En base a esto se elabora una tabla de contingencia entre las categorias de ILE e IDH
+
+```{r, echo=FALSE}
+tabla_contingencia <- table(ME$ILE_Clasificación, ME$IDH_Categoria)
+kable(tabla_contingencia,
+      caption = "Tabla de Contingencia IDH vs ILE Histórica por categoria",
+      digits = 2)
+```
+
+Para el histórico global se puede encontrar que la mayoria de datos se encuentran en la categoria Mayormente Libre y con alto indice de libertad económica. 
+
+Se puede realizar la misma evaluación para el año 2023 (ultimó año con registros para las dos variables).
+
+```{r, echo=FALSE}
+ME_2024 <- ME %>%
+  filter(Año == 2023, !is.na(ILE_Clasificación), !is.na(IDH_Categoria))
+tabla_contingencia_2024 <- table(ME_2024$ILE_Clasificación, ME_2024$IDH_Categoria)
+kable(tabla_contingencia_2024,
+      caption = "Tabla de Contingencia IDH vs ILE 2023 por categoria",
+      digits = 2)
+```
+
+
+Nuevamente la mayor concentración de valores esta clasificada como paises con IDH alto e ILE mayormente libre. 
+
+La siguiente gráfica muestra mejor la relación entre categorias:
+
+```{r, echo=FALSE}
+
+ME_2024 <- ME %>%
+  filter(Año == 2023, !is.na(ILE_Clasificación), !is.na(IDH_Categoria))
+
+
+ME_2024 <- ME_2024 %>%
+  mutate(
+    ILE_Clasificación = factor(ILE_Clasificación,
+                               levels = c("Libre", "Mayormente libre", "Moderadamente libre",
+                                          "Moderadamente regulado", "Mayormente regulado", 
+                                          "No libre", "Reprimido")),
+    IDH_Categoria = factor(IDH_Categoria,
+                           levels = c("muy alto", "alto", "medio", "bajo", "muy bajo"))
+  )
+
+tabla_contingencia_2024 <- table(ME_2024$ILE_Clasificación, ME_2024$IDH_Categoria)
+
+df_plot <- as.data.frame(tabla_contingencia_2024) %>%
+  group_by(Var1) %>%  
+  mutate(Freq_Relativa = Freq / sum(Freq)) %>%
+  ungroup()
+
+
+ggplot(df_plot, aes(x = Var1, y = Var2, size = Freq_Relativa)) +
+  geom_point(color = "blue") +
+  scale_size_area(max_size = 15) + 
+  labs(x = "ILE_Clasificación", y = "IDH_Categoria", size = "Frecuencia relativa") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Se aplican test estadísticos para foltalecer la hipótesis de dependencia entre las dos variables.
+
+```{r, echo=FALSE}
+chi_res <- chisq.test(tabla_contingencia)
+chi_tabla <- data.frame(
+  Estadístico = chi_res$statistic,
+  df = chi_res$parameter,
+  p_value = chi_res$p.value
+)
+
+kable(chi_tabla, caption = "Resultados del test Chi-cuadrado")
+assoc_res <- assocstats(tabla_contingencia)
+assoc_tabla <- data.frame(
+  Chi_cuadrado = assoc_res$chisq_tests[1],
+  df = assoc_res$chisq_tests[2],
+  p_value = assoc_res$chisq_tests[3],
+  Cramers_V = assoc_res$cramer
+)
+
+kable(assoc_tabla, caption = "Estadísticas de asociación de la tabla de contingencia")
+```
+
+Con el chi cuadrado se encuentra que para un nivel de significacia del 95% se rechaza la hipótesis nula , descartando la independencia entre variables. 
+
+Respecto la prueba de cramer, se encuentra una relación con fuerza moderada entre las dos variables. 
+
+
+***Propuesta de Modelo*** 
+
+Se realizaron varias pruebas de modelos que pudieran capturar mejor el comportamiento entre IDH e ILE , algunos incluyen modelos lineales, arboles de regresión, modelos polinomiales. Sin embargo se encontro que el modelo con mejor predictivos basado en el RMSE mas bajo es de tipo potencia.
+
+El RMSE se logro disminuir además separando el grupo de datos en dos valores de IDH.
+
+Los resultados de RMSE y visuales se expresan acontinuación: 
+
+```{r, echo=FALSE}
+
+ME_clean <- ME %>% filter(!is.na(ILE), !is.na(IDH))
+
+
+ME_low  <- ME_clean %>% filter(IDH <= 65)
+ME_high <- ME_clean %>% filter(IDH > 65)
+
+
+fit_power <- function(data) {
+  start_pow <- list(a = 1, b = 0.5, c = 0)
+  mod_pow <- nlsLM(IDH ~ a * ILE^b + c,
+                   data = data,
+                   start = start_pow,
+                   control = nls.lm.control(maxiter = 500))
+  pred_pow <- predict(mod_pow, newdata = data)
+  rmse_pow <- sqrt(mean((data$IDH - pred_pow)^2, na.rm = TRUE))
+  
+  list(model = mod_pow, pred = pred_pow, rmse = rmse_pow)
+}
+
+
+res_low  <- fit_power(ME_low)
+res_high <- fit_power(ME_high)
+
+
+
+print(res_low$rmse)
+print(res_high$rmse)
+
+
+ggplot() +
+  geom_point(data = ME_low, aes(x = ILE, y = IDH), color = "blue", alpha = 0.5) +
+  geom_point(data = ME_high, aes(x = ILE, y = IDH), color = "red", alpha = 0.5) +
+  geom_line(aes(x = ME_low$ILE, y = res_low$pred), color = "blue", size = 1.2) +
+  geom_line(aes(x = ME_high$ILE, y = res_high$pred), color = "red", size = 1.2) +
+  labs(title = "Modelo de potencia de IDH vs ILE por grupo de IDH",
+       subtitle = "Azul: IDH menor o igual a 65, Rojo: IDH mayor a 65",
+       x = "ILE",
+       y = "IDH") +
+  theme_minimal()
+
+
+```
+
+IDHbajo=a⋅ILE^b+c,es el esquema del modelo , los valores para cada uno de los coeficientes se muestran acontinuación
+
+
+```{r, echo=FALSE}
+library(glue)
+
+coef_low  <- coef(res_low$model)
+coef_high <- coef(res_high$model)
+
+
+formulas <- tibble(
+  Grupo = c("IDH menor o igual a 65", "IDH mayor a 65"),
+  a = c(round(coef_low["a"], 3), round(coef_high["a"], 3)),
+  b = c(round(coef_low["b"], 3), round(coef_high["b"], 3)),
+  c = c(round(coef_low["c"], 3), round(coef_high["c"], 3)),
+  )
+
+kable(formulas, caption = "Modelos de potencia ajustados para predecir IDH a partir de ILE", booktabs = TRUE)
+```
+
+
+***Determinar cual es el país que mayor equilibrio ha logrado en todas sus variables*** 
+
+Se construye el Top 10 paises por indicador , y se determina cual es el listado de paises en comun entre los diferentes Top.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(kableExtra)
+
+bottom_5_CG <- ME %>%
+  filter(Año == 2022, !is.na(CG)) %>%
+  arrange(CG) %>%
+  slice(1:10) %>%
+  select(Pais, CG)
+
+top_5_IPH <- ME %>%
+  arrange(desc(IPH)) %>%
+  slice(1:10) %>%
+  select(Pais, IPH)
+
+top_5_IDH <- ME %>%
+  filter(Año == 2023, !is.na(IDH)) %>%
+  arrange(desc(IDH)) %>%
+  slice(1:10) %>%
+  select(Pais, IDH)
+
+top_5_PIB <- ME %>%
+  filter(Año == 2023, !is.na(PIB)) %>%
+  arrange(desc(PIB)) %>%
+  slice(1:10) %>%
+  select(Pais, PIB)
+
+top_5_ILE <- ME %>%
+  filter(Año == 2024, !is.na(ILE)) %>%
+  arrange(desc(ILE)) %>%
+  slice(1:10) %>%
+  select(Pais, ILE)
+
+
+final_df <- tibble(
+  Pais_CG  = bottom_5_CG$Pais,
+  CG       = bottom_5_CG$CG,
+  
+  Pais_IPH = top_5_IPH$Pais,
+  IPH      = top_5_IPH$IPH,
+  
+  Pais_IDH = top_5_IDH$Pais,
+  IDH      = top_5_IDH$IDH,
+  
+  Pais_PIB = top_5_PIB$Pais,
+  PIB      = top_5_PIB$PIB,
+  
+  Pais_ILE = top_5_ILE$Pais,
+  ILE      = top_5_ILE$ILE
+)
+
+
+kable(final_df, caption = "Resumen Paises mejor rankeados por Indicador", booktabs = TRUE, linesep = "")
+```
+
+
+```{r, echo=FALSE}
+paises_bottom_CG <- bottom_5_CG$Pais
+paises_top_IPH   <- top_5_IPH$Pais
+paises_top_IDH   <- top_5_IDH$Pais
+paises_top_PIB   <- top_5_PIB$Pais
+paises_top_ILE   <- top_5_ILE$Pais
+
+paises_comunes <- Reduce(intersect, list(
+  paises_bottom_CG,
+  paises_top_IPH,
+  paises_top_IDH,
+  paises_top_PIB,
+  paises_top_ILE
+))
+
+df_comunes <- data.frame(Paises_Comunes = paises_comunes)
+
+kable(df_comunes, col.names = "Países en Común") %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2E7D32") %>%  
+  row_spec(1:nrow(df_comunes), color = "white", background = "#4CAF50") 
+```
+El único pais que aparece para los datos contemplados en este análisis es Noruega. 
